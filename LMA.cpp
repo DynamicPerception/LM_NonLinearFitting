@@ -29,7 +29,7 @@ double b[nterms];
 double gradient[nterms], c[nterms];                        /*To be fit by program*/
 double final_params[nterms];
 double alpha[nterms][nterms];
-double arry[nterms][nterms];
+double **main_matrix;
 double aug[nterms][nterms * 2];                        /* For matrix inversion */
 double **J;                             // Jacobian of residuals
 double **JT;                            // Jacobian transpose
@@ -50,10 +50,10 @@ void matrixinvert();
 void curvefit();
 void display();
 void matrixAllocate(double ***matrix, int size_i, int size_j);
-void matrixFree(double **matrix, int size_i);
+void matrixFree(double ***matrix, int size_i);
 void matrixMultiply(double** A, int A_i, int A_j, double** B, int B_i, int B_j, double** C);
 void matrixPrint(double **matirx, int i_size, int j_size);
-void arrayPrint(double _arry[], int size);
+void arrayPrint(double _main_matrix[], int size);
 double residual(int i);
 void updateResiduals();
 
@@ -66,6 +66,7 @@ int main() {
     matrixAllocate(&J, maxnpts, nterms);
     matrixAllocate(&JT, nterms, maxnpts);
     matrixAllocate(&JTJ, nterms, nterms);
+    matrixAllocate(&main_matrix, nterms, nterms);
 
     int i;
     printf("Least Squares Curve Fitting. You must modify the constant\n");
@@ -276,7 +277,18 @@ void computeJacobian() {
 
     printf("\nJTJ matrix:\n");
     matrixPrint(JTJ, nterms, nterms);
+        
+    // Get the lambda*diag(JTJ) terms
+    for (int i = 0; i < nterms; i++) {
+        main_matrix[i][i] = JTJ[i][i] * lambda;
+    }
 
+    // Complete the main step term: H + labda*diag(H), where H = JTJ
+    for (int j = 0; j < nterms; j++) {
+        for (int i = 0; i < nterms; i++) {
+            main_matrix[i][j] += JTJ[i][j];
+        }
+    }
 }
 
 void matrixAllocate(double ***matrix, int size_i, int size_j){
@@ -287,7 +299,7 @@ void matrixAllocate(double ***matrix, int size_i, int size_j){
     }    
 }
 
-void matrixFree(double **matrix, int size_i){
+void matrixFree(double ***matrix, int size_i){
     for (int i = 0; i < size_i; ++i) {
       free(matrix[i]);
     }
@@ -303,9 +315,17 @@ void matrixMultiply(double** A, int A_i, int A_j, double** B, int B_i, int B_j, 
                 sum = sum + A[c][k] * B[k][d];
             }
             C[c][d] = sum;
+            printf("val = %f\n", sum);
             sum = 0;
         }
     }
+
+    printf("\nA matrix:\n");
+    matrixPrint(A, A_i, A_j);
+    printf("B matrix:\n");
+    matrixPrint(B, B_i, B_j);
+    printf("C matrix:\n");
+    matrixPrint(C, A_i, B_j);
 }
 
 // Inverts the matrix array[][]
@@ -320,8 +340,8 @@ void matrixinvert() {
 
         for (i = k; i < nterms; i++) {
             for (j = k; j < nterms; j++) {
-                if (fabs(amax) <= fabs(arry[i][j])) {
-                    amax = arry[i][j];
+                if (fabs(amax) <= fabs(main_matrix[i][j])) {
+                    amax = main_matrix[i][j];
                     ik[k] = i;
                     jk[k] = j;
                 }
@@ -332,9 +352,9 @@ void matrixinvert() {
 
         if (i > k) {
             for (j = 0; j < nterms; j++) {
-                rsave = arry[k][j];
-                arry[k][j] = arry[i][j];
-                arry[i][j] = -1 * rsave;
+                rsave = main_matrix[k][j];
+                main_matrix[k][j] = main_matrix[i][j];
+                main_matrix[i][j] = -1 * rsave;
             }
         }
 
@@ -342,45 +362,45 @@ void matrixinvert() {
 
         if (j>k) {
             for (i = 0; i < nterms; i++) {
-                rsave = arry[i][k];
-                arry[i][k] = arry[i][j];
-                arry[i][j] = -1 * rsave;
+                rsave = main_matrix[i][k];
+                main_matrix[i][k] = main_matrix[i][j];
+                main_matrix[i][j] = -1 * rsave;
             }
         }
         for (i = 0; i < nterms; i++) {
             if (i != k) {
-                arry[i][k] = -1 * arry[i][k] / amax;
+                main_matrix[i][k] = -1 * main_matrix[i][k] / amax;
             }
         }
         for (i = 0; i < nterms; i++) {
             for (j = 0; j < nterms; j++) {
                 if (j != k && i != k) {
-                    arry[i][j] = arry[i][j] + arry[i][k] * arry[k][j];
+                    main_matrix[i][j] = main_matrix[i][j] + main_matrix[i][k] * main_matrix[k][j];
                 }
             }
         }
         for (j = 0; j < nterms; j++) {
             if (j != k) {
-                arry[k][j] = arry[k][j] / amax;
+                main_matrix[k][j] = main_matrix[k][j] / amax;
             }
         }
-        arry[k][k] = 1 / amax;
+        main_matrix[k][k] = 1 / amax;
     }
     for (k = nterms - 1; k > -1; k--) {
         j = ik[k];
         if (j > k) {
             for (i = 0; i < nterms; i++) {
-                rsave = arry[i][k];
-                arry[i][k] = -1 * arry[i][j];
-                arry[i][j] = rsave;
+                rsave = main_matrix[i][k];
+                main_matrix[i][k] = -1 * main_matrix[i][j];
+                main_matrix[i][j] = rsave;
             }
         }
         i = jk[k];
         if (i > k) {
             for (j = 0; j < nterms; j++) {
-                rsave = arry[k][j];
-                arry[k][j] = -1 * arry[i][j];
-                arry[i][j] = rsave;
+                rsave = main_matrix[k][j];
+                main_matrix[k][j] = -1 * main_matrix[i][j];
+                main_matrix[i][j] = rsave;
             }
         }
     }
@@ -441,13 +461,13 @@ void curvefit() {
         param = 1;
         for (j = 0; j < nterms; j++) {
             for (k = 0; k < nterms; k++) {
-                arry[j][k] = alpha[j][k] / sqrt(alpha[j][j] * alpha[k][k]);
+                main_matrix[j][k] = alpha[j][k] / sqrt(alpha[j][j] * alpha[k][k]);
             }
-            arry[j][j] += lambda;
+            main_matrix[j][j] += lambda;
         }
         matrixinvert();
         for (j = 0; j < nterms; j++) {
-            b[j] += gradient[k] * arry[j][k] / sqrt(alpha[j][j] * alpha[k][k]);
+            b[j] += gradient[k] * main_matrix[j][k] / sqrt(alpha[j][j] * alpha[k][k]);
         }
         updateResiduals();
         computeChisquare();
@@ -481,7 +501,7 @@ void display() {
     }
     printf("Sum of squares of residuals = %- #12.8f", chisq * nfree);
     sy = sqrt(chisq);
-}
+}   
 
 void matrixPrint(double **matrix, int i_size, int j_size) {
     for (int i = 0; i < i_size; i++) {
@@ -494,7 +514,7 @@ void matrixPrint(double **matrix, int i_size, int j_size) {
 
 void arrayPrint(double this_array[], int size) {
     for (int i = 0; i < size; i++) {
-        printf("%f, ", this_array[i]);
+        printf("%f, ", this_array[i]);  
     }
     printf("\n\n");
 }
