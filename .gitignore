@@ -1,3 +1,11 @@
+# Visual Studio files
+*.opensdf
+*.sdf
+*.suo
+*.vcxproj
+*.filters
+debug/
+
 # Object files
 *.o
 *.ko
