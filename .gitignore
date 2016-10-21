@@ -4,6 +4,7 @@
 *.suo
 *.vcxproj
 *.filters
+*.sln
 debug/
 
 # Object files
