@@ -49,7 +49,7 @@ void computeJacobian();
 void matrixinvert();
 void curvefit();
 void display();
-void matrixAllocate(double **matrix, int size_i, int size_j);
+void matrixAllocate(double ***matrix, int size_i, int size_j);
 void matrixFree(double **matrix, int size_i);
 void matrixMultiply(double** A, int A_i, int A_j, double** B, int B_i, int B_j, double** C);
 void matrixPrint(double **matirx, int i_size, int j_size);
@@ -63,9 +63,9 @@ errno_t err;
 
 int main() {
 
-    matrixAllocate(J, maxnpts, nterms);
-    matrixAllocate(JT, nterms, maxnpts);
-    matrixAllocate(JTJ, nterms, nterms);
+    matrixAllocate(&J, maxnpts, nterms);
+    matrixAllocate(&JT, nterms, maxnpts);
+    matrixAllocate(&JTJ, nterms, nterms);
 
     int i;
     printf("Least Squares Curve Fitting. You must modify the constant\n");
@@ -143,15 +143,18 @@ void readdata() {
     if (answer[0] == 'F') {
         do {
             printf("\nPlease enter the name of the data file: ");
-            fgets(filename, BUFF_SIZE, stdin);
-            printf("\n");
+
 #if defined _WIN32
+            gets_s(filename, BUFF_SIZE);
+            printf("\n");
             err = fopen_s(&fp, filename, "rb");
             if (err != 0) {
                 printf("Fatal error: could not open file %s\n", filename);
                 exit(1);
             }
 #else
+            fgets(filename, BUFF_SIZE, stdin);
+            printf("\n");
             fp = fopen(filename, "rb");
             if (fp == NULL) {
                 printf("Fatal error: could not open file %s\n", filename);
@@ -179,15 +182,16 @@ void readdata() {
             printf("Is this data correct(Y/N)?");
             fgets(answer, BUFF_SIZE, stdin);
         } while (answer[0] != 'y' && answer[0] != 'Y');
-        printf("Enter name of file to save the data in: ");
-        fgets(filename, BUFF_SIZE, stdin);
+        printf("Enter name of file to save the data in: ");        
 #if defined _WIN32
+        gets_s(filename, BUFF_SIZE);
         err = fopen_s(&fp, filename, "wb");
         if (err != 0) {
             printf("Fatal error: could not open file %s\n", filename);
             exit(1);
         }
 #else
+        fgets(filename, BUFF_SIZE, stdin);
         fp = fopen(filename, "wb");
         if (fp == NULL) {
             printf("Fatal error: could not open file %s\n", filename);
@@ -244,15 +248,15 @@ void computeChisquare() {
 void computeJacobian() {
 
     // Populate Jacobian matrix
-    for (int m = 0; m < nterms; m++) {
-        double param_temp = params[m];
-        double delta = fabs(params[m] / 100000);
-        params[m] = param_temp + delta;
+    for (int j = 0; j < nterms; j++) {
+        double param_temp = params[j];
+        double delta = fabs(params[j] / 100000);
+        params[j] = param_temp + delta;
         for (int i = 0; i < npts; i++) {
-            printf("i: %d m: %d\n", i, m);
-            J[i][m] = (func(x[i]) - yfit[i]) / delta;
+            printf("i: %d m: %d\n", i, j);
+            J[i][j] = (func(x[i]) - yfit[i]) / delta;
         }
-        params[m] = param_temp;
+        params[j] = param_temp;
     }
 
     printf("\nJacobian matrix:\n");
@@ -275,11 +279,12 @@ void computeJacobian() {
 
 }
 
-void matrixAllocate(double **matrix, int size_i, int size_j){
-    matrix = (double **)malloc(size_i * sizeof(double));
+void matrixAllocate(double ***matrix, int size_i, int size_j){
+    printf("Allocating memory for [%d] x [%d] matrix\n\n", size_i, size_j);
+    *matrix = (double **)malloc(size_i * sizeof(double*));
     for(int i = 0; i < size_i; i++){
-        matrix[i] = (double *)malloc(size_j * sizeof(double));
-    }
+        (*matrix)[i] = (double *)malloc(size_j * sizeof( double ));
+    }    
 }
 
 void matrixFree(double **matrix, int size_i){
@@ -290,12 +295,12 @@ void matrixFree(double **matrix, int size_i){
 }
 
 void matrixMultiply(double** A, int A_i, int A_j, double** B, int B_i, int B_j, double** C){
-    double sum;
+    double sum = 0;
 
     for (int c = 0 ; c < A_i ; c++ ) {
         for (int d = 0 ; d < B_j ; d++ ) {
             for (int k = 0 ; k < B_i ; k++ ) {
-                sum = sum + A[c][k]*B[k][d];
+                sum = sum + A[c][k] * B[k][d];
             }
             C[c][d] = sum;
             sum = 0;
