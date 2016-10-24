@@ -20,20 +20,21 @@ Tim Seufert 7-94 */
 #define nterms 2
 /* Number of parameters to be fit */
 /***********************************************************/
-int param, iteration, n, nfree;
+int iteration, n, nfree;
+bool use_new_params;
 int npts;                                                   /* Number of data pairs */
 double x[maxnpts], y[maxnpts];        /*x,y,y*/
 double yfit[maxnpts];                                  /*Calculated values of y */
 double params[nterms];                                      /* a[i]=c[i] params */
 double b[nterms];
-double gradient[nterms], c[nterms];                        /*To be fit by program*/
+double c[nterms];                        /*To be fit by program*/
 double final_params[nterms];
 double alpha[nterms][nterms];
 double **main_matrix;
-double aug[nterms][nterms * 2];                        /* For matrix inversion */
 double **J;                             // Jacobian of residuals
 double **JT;                            // Jacobian transpose
-double **JTJ;                           // JT * J
+double **Hessian;                           // JT * J
+double **parameter_diff;
 double lambda;                                         /*Proportion of gradient search(=0.001 at start)*/
 double chisq;                                          /* Variance of residuals in curve fit */
 double chisq_ref_val, sy;
@@ -46,14 +47,14 @@ void readdata();
 void unweightedinput();
 void computeChisquare();
 void computeJacobian();
-void matrixinvert();
+void matrixInvert(double **matrix);
 void curvefit();
 void display();
 void matrixAllocate(double ***matrix, int size_i, int size_j);
 void matrixFree(double ***matrix, int size_i);
 void matrixMultiply(double** A, int A_i, int A_j, double** B, int B_i, int B_j, double** C);
 void matrixPrint(double **matirx, int i_size, int j_size);
-void arrayPrint(double _main_matrix[], int size);
+void arrayPrint(double arry[], int size);
 double residual(int i);
 void updateResiduals();
 
@@ -65,8 +66,9 @@ int main() {
 
     matrixAllocate(&J, maxnpts, nterms);
     matrixAllocate(&JT, nterms, maxnpts);
-    matrixAllocate(&JTJ, nterms, nterms);
+    matrixAllocate(&Hessian, nterms, nterms);
     matrixAllocate(&main_matrix, nterms, nterms);
+    matrixAllocate(&parameter_diff, nterms, 1);
 
     int i;
     printf("Least Squares Curve Fitting. You must modify the constant\n");
@@ -107,24 +109,24 @@ void print_data() {
                         /*******************************/
 double func(double p_x) /* The function you are fitting*/
 {                       /*******************************/
-    int loop;
-    double value;
-    if (param == 1) {
-        for (loop = 0; loop < nterms; loop++) {
-            c[loop] = b[loop];
+
+    
+    if (use_new_params) {
+        for (int i = 0; i < nterms; i++) {
+            c[i] = b[i];
         }
     }
     else {
-        for (loop = 0; loop < nterms; loop++) {
-            c[loop] = params[loop];
+        for (int i = 0; i < nterms; i++) {
+            c[i] = params[i];
         }
     }
 
     /********************************************/
     /*      Enter the function to be fit:       */
     /********************************************/    
-    //value = c[0] * p_x * p_x + c[1] * p_x + c[2]; /*Ax^2 + Bx + C*/
-    value = c[0] * cos(c[1] * p_x) + c[1] * sin(c[0] * p_x);
+    //double value = c[0] * p_x * p_x + c[1] * p_x + c[2]; /*Ax^2 + Bx + C*/
+    double value = c[0] * cos(c[1] * p_x) + c[1] * sin(c[0] * p_x);
     //printf("\nfunc(x) -- A*cos(BX) + B*sin(AX) -- x: %f a: %f  b: %f  =  value: %f\n", p_x, c[0], c[1], value);
     return ( value );
 }
@@ -235,14 +237,15 @@ void unweightedinput() {
 
 // Sum of square of differences between measured and calculated y values
 void computeChisquare() {
+    updateResiduals();
     int i;
     chisq = 0;
     for (i = 0; i < npts; i++){        
         chisq += residual(i) * residual(i);
-        printf("y[i]: %f -- yfit[i]: %f -- chisq: %f\n", y[i], yfit[i], chisq);
+        //printf("y[i]: %f -- yfit[i]: %f -- chisq: %f\n", y[i], yfit[i], chisq);
     }
     chisq /= nfree;
-    printf("\nFinal chisq: %f\n\n", chisq);
+    printf("\nchisq: %f\n\n", chisq);
 }
 
 
@@ -273,22 +276,10 @@ void computeJacobian() {
     printf("\nJacobian transpose matrix:\n");
     matrixPrint(JT, nterms, npts);
 
-    matrixMultiply(JT, nterms, npts, J, npts, nterms, JTJ);
+    matrixMultiply(JT, nterms, npts, J, npts, nterms, Hessian);
 
-    printf("\nJTJ matrix:\n");
-    matrixPrint(JTJ, nterms, nterms);
-        
-    // Get the lambda*diag(JTJ) terms
-    for (int i = 0; i < nterms; i++) {
-        main_matrix[i][i] = JTJ[i][i] * lambda;
-    }
-
-    // Complete the main step term: H + labda*diag(H), where H = JTJ
-    for (int j = 0; j < nterms; j++) {
-        for (int i = 0; i < nterms; i++) {
-            main_matrix[i][j] += JTJ[i][j];
-        }
-    }
+    printf("\nHessian matrix:\n");
+    matrixPrint(Hessian, nterms, nterms);
 }
 
 void matrixAllocate(double ***matrix, int size_i, int size_j){
@@ -299,11 +290,11 @@ void matrixAllocate(double ***matrix, int size_i, int size_j){
     }    
 }
 
-void matrixFree(double ***matrix, int size_i){
-    for (int i = 0; i < size_i; ++i) {
-      free(matrix[i]);
+void matrixFree(double ***matrix, int size_j){
+    for (int i = 0; i < size_j; ++i) {
+      free(*matrix[i]);
     }
-    free(matrix);
+    free(*matrix);
 }
 
 void matrixMultiply(double** A, int A_i, int A_j, double** B, int B_i, int B_j, double** C){
@@ -315,22 +306,14 @@ void matrixMultiply(double** A, int A_i, int A_j, double** B, int B_i, int B_j, 
                 sum = sum + A[c][k] * B[k][d];
             }
             C[c][d] = sum;
-            printf("val = %f\n", sum);
             sum = 0;
         }
     }
-
-    printf("\nA matrix:\n");
-    matrixPrint(A, A_i, A_j);
-    printf("B matrix:\n");
-    matrixPrint(B, B_i, B_j);
-    printf("C matrix:\n");
-    matrixPrint(C, A_i, B_j);
 }
 
 // Inverts the matrix array[][]
 // Pivoting reduces rounding error
-void matrixinvert() {
+void matrixInvert(double **matrix) {
     int i, j, k, ik[nterms], jk[nterms];
     double rsave, amax;
 
@@ -340,8 +323,8 @@ void matrixinvert() {
 
         for (i = k; i < nterms; i++) {
             for (j = k; j < nterms; j++) {
-                if (fabs(amax) <= fabs(main_matrix[i][j])) {
-                    amax = main_matrix[i][j];
+                if (fabs(amax) <= fabs(matrix[i][j])) {
+                    amax = matrix[i][j];
                     ik[k] = i;
                     jk[k] = j;
                 }
@@ -352,9 +335,9 @@ void matrixinvert() {
 
         if (i > k) {
             for (j = 0; j < nterms; j++) {
-                rsave = main_matrix[k][j];
-                main_matrix[k][j] = main_matrix[i][j];
-                main_matrix[i][j] = -1 * rsave;
+                rsave = matrix[k][j];
+                matrix[k][j] = matrix[i][j];
+                matrix[i][j] = -1 * rsave;
             }
         }
 
@@ -362,45 +345,45 @@ void matrixinvert() {
 
         if (j>k) {
             for (i = 0; i < nterms; i++) {
-                rsave = main_matrix[i][k];
-                main_matrix[i][k] = main_matrix[i][j];
-                main_matrix[i][j] = -1 * rsave;
+                rsave = matrix[i][k];
+                matrix[i][k] = matrix[i][j];
+                matrix[i][j] = -1 * rsave;
             }
         }
         for (i = 0; i < nterms; i++) {
             if (i != k) {
-                main_matrix[i][k] = -1 * main_matrix[i][k] / amax;
+                matrix[i][k] = -1 * matrix[i][k] / amax;
             }
         }
         for (i = 0; i < nterms; i++) {
             for (j = 0; j < nterms; j++) {
                 if (j != k && i != k) {
-                    main_matrix[i][j] = main_matrix[i][j] + main_matrix[i][k] * main_matrix[k][j];
+                    matrix[i][j] = matrix[i][j] + matrix[i][k] * matrix[k][j];
                 }
             }
         }
         for (j = 0; j < nterms; j++) {
             if (j != k) {
-                main_matrix[k][j] = main_matrix[k][j] / amax;
+                matrix[k][j] = matrix[k][j] / amax;
             }
         }
-        main_matrix[k][k] = 1 / amax;
+        matrix[k][k] = 1 / amax;
     }
     for (k = nterms - 1; k > -1; k--) {
         j = ik[k];
         if (j > k) {
             for (i = 0; i < nterms; i++) {
-                rsave = main_matrix[i][k];
-                main_matrix[i][k] = -1 * main_matrix[i][j];
-                main_matrix[i][j] = rsave;
+                rsave = matrix[i][k];
+                matrix[i][k] = -1 * matrix[i][j];
+                matrix[i][j] = rsave;
             }
         }
         i = jk[k];
         if (i > k) {
             for (j = 0; j < nterms; j++) {
-                rsave = main_matrix[k][j];
-                main_matrix[k][j] = -1 * main_matrix[i][j];
-                main_matrix[i][j] = rsave;
+                rsave = matrix[k][j];
+                matrix[k][j] = -1 * matrix[i][j];
+                matrix[i][j] = rsave;
             }
         }
     }
@@ -410,18 +393,22 @@ void matrixinvert() {
 void curvefit() {
     int i, j, k;
     nfree = npts - nterms;
+
+    double **gradient_vector;
+    matrixAllocate(&gradient_vector, nterms, 1);
     
     // Clear b and gradient vectors
     for (j = 0; j < nterms; j++) {
-        b[j] = gradient[j] = 0;
+        b[j] = gradient_vector[j][0] = 0;
         for (k = 0; k <= j; k++) {
             alpha[j][k] = 0;
         }
     }
-    param = 0;
+
+    // For the first fit attempt, make func() use the old parameters
+    use_new_params = false;
     
     // Find y values for current parameter values
-    updateResiduals();
     computeChisquare();
     chisq_ref_val = chisq;
 
@@ -434,51 +421,76 @@ void curvefit() {
     for (i = 0; i < npts; i++) {
         for (j = 0; j < nterms; j++) {
             // Produces a vector of 1 x nterms
-            gradient[j] += residual(i) * J[i][j];   //  Compute gradient vector
+            gradient_vector[j][0] += residual(i) * J[i][j];   //  Compute gradient vector
         }
     }
+    matrixPrint(gradient_vector, nterms, 1);
 
-    // For each data point set...
-    for (i = 0; i < npts; i++) {
-        // ... for each parameter term...
-        for (j = 0; j < nterms; j++) {
-            // res vector is 1 x npts, Jacobian is npts x nterms
-            for (k = 0; k <= j; k++) {
-                alpha[j][k] += J[i][j] * J[i][k]; // J(T)*J ???
-            }
-        }
-    }
-
-    // Transpose matrix
-    for (j = 0; j < nterms; j++) {
-        for (k = 0; k <= j; k++) {
-            alpha[k][j] = alpha[j][k];
-        }
-    }
-
+    int loop_count = 0;
+    
     // Keep looping until new chisq is less than old chisq
     do {
-        param = 1;
-        for (j = 0; j < nterms; j++) {
-            for (k = 0; k < nterms; k++) {
-                main_matrix[j][k] = alpha[j][k] / sqrt(alpha[j][j] * alpha[k][k]);
+        loop_count++;
+
+        // Copy the Hessian matrix into the main matrix
+        for (int j = 0; j < nterms; j++) {
+            for (int i = 0; i < nterms; i++) {
+                main_matrix[i][j] = Hessian[i][j];
             }
-            main_matrix[j][j] += lambda;
         }
-        matrixinvert();
-        for (j = 0; j < nterms; j++) {
-            b[j] += gradient[k] * main_matrix[j][k] / sqrt(alpha[j][j] * alpha[k][k]);
+
+        // Add the lambda*diag(Hessian) terms
+        for (int i = 0; i < nterms; i++) {
+            main_matrix[i][i] += Hessian[i][i] * lambda;
         }
-        updateResiduals();
+
+        printf("\nMain matrix:\n");
+        matrixPrint(main_matrix, nterms, nterms);
+
+        printf("Inverted main matrix\n");
+        matrixPrint(main_matrix, nterms, nterms);
+
+        // Get the difference vector, delta = (H + lambda*Diag(H))^-1) * gradient
+        matrixMultiply(main_matrix, nterms, nterms, gradient_vector, nterms, 1, parameter_diff);
+
+        printf("Parameter offset\n");
+        matrixPrint(parameter_diff, nterms, 1);
+
+        // Generate new parameters from difference vector
+        for (int i = 0; i < nterms; i++) {
+            b[i] = params[i] - parameter_diff[i][0];
+        }
+
+        printf("New parameters\n");
+        arrayPrint(b, nterms);
+        
+        // Find the new chi squared value using the new parameters
+        use_new_params = true;        
         computeChisquare();
+        
+        // If this step wasn't successful, try again with a higher lambda value
         if (( chisq_ref_val - chisq ) < 0) {
+            printf("Failed to lower chisq, trying bigger lambda\n");
             lambda *= 10;
         }
-    } while(chisq > chisq_ref_val);
+    // Loop until the new parameters produce a lower chi squared value than we started with
+    } while(chisq > chisq_ref_val || loop_count > 10);
+
+    printf("Step accepted, saving new params, decreasing lambda value\n");
+
+    // Update the parameters list with the new parameter set
     for (j = 0; j < nterms; j++) {
         params[j] = b[j];
     }
+
+    // Step is accepted
     lambda /= 10;
+
+    matrixFree(&gradient_vector, 1);
+}
+
+void updateParameters() {
+
 }
 
 void updateResiduals(){
