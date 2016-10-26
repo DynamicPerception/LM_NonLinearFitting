@@ -20,29 +20,36 @@ Tim Seufert 7-94 */
 #define nterms 2
 /* Number of parameters to be fit */
 /***********************************************************/
+
+
+
+/****** Global Variables ******/
 int iteration, n, nfree;
 bool use_new_params;
-int npts;                                                   /* Number of data pairs */
-double x[maxnpts], y[maxnpts];        /*x,y,y*/
-double yfit[maxnpts];                                  /*Calculated values of y */
-double params[nterms];                                      /* a[i]=c[i] params */
+int npts;                               // Number of data pairs
+double x[maxnpts], y[maxnpts];          // The data set to be fit
+double yfit[maxnpts];                   // Calculated values of y from func()
+double params[nterms];                  // The parameters at the beginning of a step before perturbation
 double b[nterms];
-double c[nterms];                        /*To be fit by program*/
+double c[nterms];                       // The parameter used for the current function call
 double final_params[nterms];
 double alpha[nterms][nterms];
-double **main_matrix;
+double **H_lm;                          // The Levenberg-Marquardt Hessian term
 double **J;                             // Jacobian of residuals
 double **JT;                            // Jacobian transpose
-double **Hessian;                           // JT * J
-double **parameter_diff;
-double lambda;                                         /*Proportion of gradient search(=0.001 at start)*/
-double chisq;                                          /* Variance of residuals in curve fit */
-double chisq_ref_val, sy;
-char errorchoice;
+double **H;                             // The approximate Hessian, where H = JT * J
+double **residual_vector;               // Vector containing the residuals
+double **perturbation_vector;           // The amount by which the parameters should be adjusted for the current step
+double lambda;                          // Proportion of gradient search(=0.001 at start)
+double chisq;                           // Variance of residuals in curve fit
+double chisq_ref_val;
 const int BUFF_SIZE = 100;
 char filename[20];
 char answer[BUFF_SIZE];
 FILE *fp;
+
+
+/****** Function Declarations ******/
 void readdata();
 void unweightedinput();
 void computeChisquare();
@@ -66,9 +73,10 @@ int main() {
 
     matrixAllocate(&J, maxnpts, nterms);
     matrixAllocate(&JT, nterms, maxnpts);
-    matrixAllocate(&Hessian, nterms, nterms);
-    matrixAllocate(&main_matrix, nterms, nterms);
-    matrixAllocate(&parameter_diff, nterms, 1);
+    matrixAllocate(&H, nterms, nterms);
+    matrixAllocate(&H_lm, nterms, nterms);
+    matrixAllocate(&perturbation_vector, nterms, 1);
+    matrixAllocate(&residual_vector, maxnpts, 1);
 
     int i;
     printf("Least Squares Curve Fitting. You must modify the constant\n");
@@ -83,10 +91,12 @@ int main() {
             params[i] = atof(answer);
         }
     }
+
     printf("\nInitial parameters:\n");
     arrayPrint(params, nterms);
     lambda = 0.001;
     iteration = 0;
+
     do {
         curvefit();
         iteration++;
@@ -110,12 +120,13 @@ void print_data() {
 double func(double p_x) /* The function you are fitting*/
 {                       /*******************************/
 
-    
+    // Use parameters after perturbation
     if (use_new_params) {
         for (int i = 0; i < nterms; i++) {
             c[i] = b[i];
         }
     }
+    // Use parameters prior to this step's perturbation
     else {
         for (int i = 0; i < nterms; i++) {
             c[i] = params[i];
@@ -244,7 +255,7 @@ void computeChisquare() {
         chisq += residual(i) * residual(i);
         //printf("y[i]: %f -- yfit[i]: %f -- chisq: %f\n", y[i], yfit[i], chisq);
     }
-    chisq /= nfree;
+    //chisq /= nfree;
     printf("\nchisq: %f\n\n", chisq);
 }
 
@@ -276,10 +287,10 @@ void computeJacobian() {
     printf("\nJacobian transpose matrix:\n");
     matrixPrint(JT, nterms, npts);
 
-    matrixMultiply(JT, nterms, npts, J, npts, nterms, Hessian);
+    matrixMultiply(JT, nterms, npts, J, npts, nterms, H);
 
     printf("\nHessian matrix:\n");
-    matrixPrint(Hessian, nterms, nterms);
+    matrixPrint(H, nterms, nterms);
 }
 
 void matrixAllocate(double ***matrix, int size_i, int size_j){
@@ -352,13 +363,13 @@ void matrixInvert(double **matrix) {
         }
         for (i = 0; i < nterms; i++) {
             if (i != k) {
-                matrix[i][k] = -1 * matrix[i][k] / amax;
+                matrix[i][k] = -1 * (matrix[i][k]) / amax;
             }
         }
         for (i = 0; i < nterms; i++) {
             for (j = 0; j < nterms; j++) {
                 if (j != k && i != k) {
-                    matrix[i][j] = matrix[i][j] + matrix[i][k] * matrix[k][j];
+                    matrix[i][j] = matrix[i][j] + matrix[i][k] * (matrix[k][j]);
                 }
             }
         }
@@ -374,7 +385,7 @@ void matrixInvert(double **matrix) {
         if (j > k) {
             for (i = 0; i < nterms; i++) {
                 rsave = matrix[i][k];
-                matrix[i][k] = -1 * matrix[i][j];
+                matrix[i][k] = -1 * (matrix[i][j]);
                 matrix[i][j] = rsave;
             }
         }
@@ -382,7 +393,7 @@ void matrixInvert(double **matrix) {
         if (i > k) {
             for (j = 0; j < nterms; j++) {
                 rsave = matrix[k][j];
-                matrix[k][j] = -1 * matrix[i][j];
+                matrix[k][j] = -1 * (matrix[i][j]);
                 matrix[i][j] = rsave;
             }
         }
@@ -391,16 +402,15 @@ void matrixInvert(double **matrix) {
 
 // Curve fitting algorithm
 void curvefit() {
-    int i, j, k;
     nfree = npts - nterms;
 
     double **gradient_vector;
     matrixAllocate(&gradient_vector, nterms, 1);
     
     // Clear b and gradient vectors
-    for (j = 0; j < nterms; j++) {
+    for (int j = 0; j < nterms; j++) {
         b[j] = gradient_vector[j][0] = 0;
-        for (k = 0; k <= j; k++) {
+        for (int k = 0; k <= j; k++) {
             alpha[j][k] = 0;
         }
     }
@@ -416,49 +426,58 @@ void curvefit() {
     printf("\nComputing Jacobian matrix\n");
     computeJacobian();
 
-    printf("Computing gradient\n");
-    // For each data point set...
-    for (i = 0; i < npts; i++) {
-        for (j = 0; j < nterms; j++) {
-            // Produces a vector of 1 x nterms
-            gradient_vector[j][0] += residual(i) * J[i][j];   //  Compute gradient vector
-        }
+    // Populate the residual_vector
+    for(int i = 0; i < npts; i++){
+        residual_vector[i][0] = residual(i);
     }
+
+    printf("Residual vector:\n");
+    matrixPrint(residual_vector, npts, 1);
+
+    matrixMultiply(JT, nterms, npts, residual_vector, npts, 1, gradient_vector);
+
+    printf("Gradient vector:\n");
     matrixPrint(gradient_vector, nterms, 1);
 
     int loop_count = 0;
+    int loop_max = 20;
     
     // Keep looping until new chisq is less than old chisq
     do {
         loop_count++;
 
-        // Copy the Hessian matrix into the main matrix
+        printf("H:\n");
+        matrixPrint(H, nterms, nterms);
+
+        // Copy the Hessian matrix into the LM Hessian, H_lm
         for (int j = 0; j < nterms; j++) {
             for (int i = 0; i < nterms; i++) {
-                main_matrix[i][j] = Hessian[i][j];
+                H_lm[i][j] = H[i][j];
             }
         }
 
         // Add the lambda*diag(Hessian) terms
         for (int i = 0; i < nterms; i++) {
-            main_matrix[i][i] += Hessian[i][i] * lambda;
+            H_lm[i][i] += H[i][i] * lambda;
         }
 
-        printf("\nMain matrix:\n");
-        matrixPrint(main_matrix, nterms, nterms);
+        printf("H_lm:\n");
+        matrixPrint(H_lm, nterms, nterms);
 
-        printf("Inverted main matrix\n");
-        matrixPrint(main_matrix, nterms, nterms);
+        matrixInvert(H_lm);
+
+        printf("Inverse H_lm\n");
+        matrixPrint(H_lm, nterms, nterms);
 
         // Get the difference vector, delta = (H + lambda*Diag(H))^-1) * gradient
-        matrixMultiply(main_matrix, nterms, nterms, gradient_vector, nterms, 1, parameter_diff);
+        matrixMultiply(H_lm, nterms, nterms, gradient_vector, nterms, 1, perturbation_vector);
 
         printf("Parameter offset\n");
-        matrixPrint(parameter_diff, nterms, 1);
+        matrixPrint(perturbation_vector, nterms, 1);
 
-        // Generate new parameters from difference vector
+        // Generate new parameters from perturbation vector
         for (int i = 0; i < nterms; i++) {
-            b[i] = params[i] - parameter_diff[i][0];
+            b[i] = params[i] - perturbation_vector[i][0];
         }
 
         printf("New parameters\n");
@@ -470,16 +489,22 @@ void curvefit() {
         
         // If this step wasn't successful, try again with a higher lambda value
         if (( chisq_ref_val - chisq ) < 0) {
-            printf("Failed to lower chisq, trying bigger lambda\n");
             lambda *= 10;
+            printf("Failed to lower chisq, trying bigger lambda: %f\n", lambda);
         }
     // Loop until the new parameters produce a lower chi squared value than we started with
-    } while(chisq > chisq_ref_val || loop_count > 10);
+    } while(chisq > chisq_ref_val && loop_count < loop_max);
 
-    printf("Step accepted, saving new params, decreasing lambda value\n");
+    if(loop_count < loop_max){
+        printf("Step accepted, saving new params, decreasing lambda value\n");
+    }
+    else{
+        printf("Failed to converge. :-(");
+    }
+    printf("Old chisq: %f  new chisq: %f", chisq_ref_val, chisq);
 
     // Update the parameters list with the new parameter set
-    for (j = 0; j < nterms; j++) {
+    for (int j = 0; j < nterms; j++) {
         params[j] = b[j];
     }
 
@@ -511,8 +536,7 @@ void display() {
         printf("Params[%3dl = %-#12.8f\n", i, params[i]);
         final_params[i] = params[i];
     }
-    printf("Sum of squares of residuals = %- #12.8f", chisq * nfree);
-    sy = sqrt(chisq);
+    printf("Sum of squares of residuals = %- #12.8f", chisq);
 }   
 
 void matrixPrint(double **matrix, int i_size, int j_size) {
